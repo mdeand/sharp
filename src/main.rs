@@ -1,5 +1,5 @@
 pub mod app;
-pub mod render;
+pub mod gfx;
 
 async fn run() {
   let event_loop = winit::event_loop::EventLoop::new().unwrap();

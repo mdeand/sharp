@@ -2,7 +2,11 @@ use std::{cell::OnceCell, sync::Arc};
 
 use egui_wgpu::wgpu;
 
-use crate::render::{egui_renderer::EguiRenderer, scene_renderer::SceneRenderer};
+use crate::gfx::{
+  camera::{Camera, CameraController},
+  egui_renderer::EguiRenderer,
+  scene_renderer::SceneRenderer,
+};
 
 pub struct AppState {
   device: wgpu::Device,
@@ -11,6 +15,8 @@ pub struct AppState {
   surface: wgpu::Surface<'static>,
   egui_renderer: EguiRenderer,
   scene_renderer: SceneRenderer,
+  camera: Camera,
+  camera_controller: CameraController,
 }
 
 impl AppState {
@@ -61,7 +67,17 @@ impl AppState {
 
     let egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
 
-    let scene_renderer = SceneRenderer::new(&device, surface_config.format);
+    let camera = Camera {
+      eye: (0.0, 1.0, 2.0).into(),
+      target: (0.0, 0.0, 0.0).into(),
+      up: cgmath::Vector3::unit_y(),
+      aspect: width as f32 / height as f32,
+      fovy: 45.0,
+      znear: 0.1,
+      zfar: 100.0,
+    };
+
+    let scene_renderer = SceneRenderer::new(&device, surface_config.format, &camera);
 
     Self {
       device,
@@ -70,13 +86,22 @@ impl AppState {
       surface,
       egui_renderer,
       scene_renderer,
+      camera,
+      camera_controller: CameraController::new(1.0, 32.0, 1000.0),
     }
   }
 
   fn resize_surface(&mut self, new_width: u32, new_height: u32) {
-    self.surface_config.width = new_width;
-    self.surface_config.height = new_height;
-    self.surface.configure(&self.device, &self.surface_config);
+    if new_width > 0 && new_height > 0 {
+      self.surface_config.width = new_width;
+      self.surface_config.height = new_height;
+
+      self.camera.aspect = new_width as f32 / new_height as f32;
+
+      self.surface.configure(&self.device, &self.surface_config);
+
+      self.scene_renderer.update_camera(&self.queue, &self.camera);
+    }
   }
 }
 
@@ -106,6 +131,11 @@ impl App {
     let initial_height = 768;
 
     let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(initial_width, initial_height));
+
+    window
+      .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+      .expect("Failed to grab cursor");
+    window.set_cursor_visible(false);
 
     let surface = self
       .instance
@@ -168,6 +198,10 @@ impl App {
       .device
       .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
+    state
+      .scene_renderer
+      .update_camera(&state.queue, &state.camera);
+
     state.scene_renderer.render(&mut encoder, &surface_view);
 
     let window = self.window.get().expect("Window not initialized!");
@@ -175,24 +209,21 @@ impl App {
     {
       state.egui_renderer.begin_frame(window);
 
-      egui::Window::new("winit + egui + wgpu says hello!")
+      egui::Window::new("Debug")
         .resizable(true)
         .vscroll(true)
-        .default_open(false)
+        .default_open(true)
         .show(state.egui_renderer.context(), |ui| {
-          ui.label("Label");
+          ui.label(format!(
+            "Pixels per point: {}",
+            state.egui_renderer.context().pixels_per_point()
+          ));
 
-          if ui.button("Button").clicked() {
-            println!("clicked!")
-          }
+          ui.label(format!("Scale factor: {}", window.scale_factor()));
 
-          ui.separator();
-          ui.horizontal(|ui| {
-            ui.label(format!(
-              "Pixels per point: {}",
-              state.egui_renderer.context().pixels_per_point()
-            ));
-          });
+          ui.label(format!("Sensitivity (cm/360): {}", 32.0,));
+
+          ui.label(format!("Mouse DPI: {}", 1000.0,));
         });
 
       state.egui_renderer.end_frame_and_draw(
@@ -250,6 +281,25 @@ impl winit::application::ApplicationHandler for App {
         self.handle_resize(new_size.width, new_size.height);
       }
       _ => (),
+    }
+  }
+
+  fn device_event(
+    &mut self,
+    _event_loop: &winit::event_loop::ActiveEventLoop,
+    _device_id: winit::event::DeviceId,
+    event: winit::event::DeviceEvent,
+  ) {
+    if let winit::event::DeviceEvent::Motion { axis, value } = event {
+      let state = self.state.get_mut().unwrap();
+
+      match axis {
+        0 => state.camera_controller.process_mouse(value, 0.0),
+        1 => state.camera_controller.process_mouse(0.0, value),
+        _ => (),
+      }
+
+      state.camera_controller.update_camera(&mut state.camera);
     }
   }
 }

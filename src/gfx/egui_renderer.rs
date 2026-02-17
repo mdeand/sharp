@@ -91,6 +91,7 @@ impl EguiRenderer {
       .state
       .egui_ctx()
       .tessellate(full_output.shapes, self.state.egui_ctx().pixels_per_point());
+    
     for (id, image_delta) in &full_output.textures_delta.set {
       self
         .renderer

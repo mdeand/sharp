@@ -1,6 +1,8 @@
 use egui_wgpu::wgpu::util::DeviceExt;
 use egui_wgpu::wgpu::{self, Buffer, Device, RenderPipeline, TextureView};
 
+use crate::gfx::camera::{Camera, CameraUniform};
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -34,51 +36,60 @@ pub struct SceneRenderer {
   render_pipeline: RenderPipeline,
   vertex_buffer: Buffer,
   vertex_count: u32,
+
+  camera_uniform: CameraUniform,
+  camera_buffer: Buffer,
+  camera_bind_group: wgpu::BindGroup,
 }
 
 impl SceneRenderer {
-  pub fn new(device: &Device, surface_format: wgpu::TextureFormat) -> Self {
+  pub fn new(device: &Device, surface_format: wgpu::TextureFormat, camera: &Camera) -> Self {
+    let mut camera_uniform = CameraUniform::new();
+    camera_uniform.update_view_proj(camera);
+
+    let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+      label: Some("Camera Buffer"),
+      contents: bytemuck::cast_slice(&[camera_uniform]),
+      usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let camera_bind_group_layout =
+      device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        entries: &[wgpu::BindGroupLayoutEntry {
+          binding: 0,
+          visibility: wgpu::ShaderStages::VERTEX, // Only vertex shader needs this
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
+        }],
+        label: Some("camera_bind_group_layout"),
+      });
+
+    let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+      layout: &camera_bind_group_layout,
+      entries: &[wgpu::BindGroupEntry {
+        binding: 0,
+        resource: camera_buffer.as_entire_binding(),
+      }],
+      label: Some("camera_bind_group"),
+    });
+
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-      label: Some("triangle shader"),
-      source: wgpu::ShaderSource::Wgsl(
-        r#"
-struct VertexInput {
-    @location(0) position: vec3<f32>,
-    @location(1) color: vec3<f32>,
-}
-
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
-}
-
-@vertex
-fn vs_main(
-    model: VertexInput,
-) -> VertexOutput {
-    var out: VertexOutput;
-    out.clip_position = vec4<f32>(model.position, 1.0);
-    out.color = model.color;
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
-}
-"#
-        .into(),
-      ),
+      label: Some("scene shader"),
+      source: wgpu::ShaderSource::Wgsl(include_str!("shaders/scene.wgsl").into()),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-      label: Some("triangle pipeline layout"),
-      bind_group_layouts: &[],
+      label: Some("Render Pipeline Layout"),
+      bind_group_layouts: &[&camera_bind_group_layout], // Included here!
       push_constant_ranges: &[],
     });
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-      label: Some("triangle render pipeline"),
+      label: Some("scene render pipeline"),
       layout: Some(&pipeline_layout),
       cache: None,
       vertex: wgpu::VertexState {
@@ -143,12 +154,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       render_pipeline,
       vertex_buffer,
       vertex_count,
+      camera_uniform,
+      camera_buffer,
+      camera_bind_group,
     }
+  }
+
+  pub fn update_camera(&mut self, queue: &wgpu::Queue, camera: &Camera) {
+    self.camera_uniform.update_view_proj(camera);
+    queue.write_buffer(
+      &self.camera_buffer,
+      0,
+      bytemuck::cast_slice(&[self.camera_uniform]),
+    );
   }
 
   pub fn render(&self, encoder: &mut wgpu::CommandEncoder, surface_view: &TextureView) {
     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-      label: Some("triangle render pass"),
+      label: Some("scene render pass"),
       color_attachments: &[Some(wgpu::RenderPassColorAttachment {
         view: surface_view,
         resolve_target: None,
@@ -169,6 +192,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     });
 
     rpass.set_pipeline(&self.render_pipeline);
+    rpass.set_bind_group(0, &self.camera_bind_group, &[]);
     rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
     rpass.draw(0..self.vertex_count, 0..1);
   }
