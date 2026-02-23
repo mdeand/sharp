@@ -9,5 +9,11 @@ cgmath = "0.18.0"
 egui = "0.33.3"
 egui-wgpu = { version = "0.33.3", features = ["winit"] }
 egui-winit = "0.33.3"
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+] }
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
 pollster = "0.4.0"
+rodio = "0.20"
 winit = "0.30.12"

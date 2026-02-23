@@ -21,6 +21,20 @@ impl Camera {
 
     correction * proj * view
   }
+
+  /// Build the inverse of a rotation-only view-projection (translation stripped).
+  /// Used by the skybox to reconstruct world-space ray directions from clip coords.
+  pub fn build_skybox_inv_vp(&self) -> Matrix4<f32> {
+    let mut view = Matrix4::look_at_rh(self.eye, self.target, self.up);
+    // Zero out the translation column so the skybox only rotates
+    view.w = Vector4::new(0.0, 0.0, 0.0, 1.0);
+    let proj = perspective(Deg(self.fovy), self.aspect, self.znear, self.zfar);
+    let correction = Matrix4::new(
+      1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
+    );
+    let vp = correction * proj * view;
+    vp.invert().unwrap_or(Matrix4::identity())
+  }
 }
 
 #[repr(C)]
@@ -86,13 +100,18 @@ impl CameraController {
     }
   }
 
-  pub fn update_camera(&self, camera: &mut Camera) {
-    let forward = Vector3::new(
+  /// Unit direction the camera is looking.
+  pub fn forward_dir(&self) -> Vector3<f32> {
+    Vector3::new(
       self.yaw.0.cos() * self.pitch.0.cos(),
       self.pitch.0.sin(),
       self.yaw.0.sin() * self.pitch.0.cos(),
     )
-    .normalize();
+    .normalize()
+  }
+
+  pub fn update_camera(&self, camera: &mut Camera) {
+    let forward = self.forward_dir();
 
     let right = forward.cross(Vector3::unit_y()).normalize();
 
